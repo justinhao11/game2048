@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect, useCallback, useMemo } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
 
 type GameBoard = (number | null)[][]
 type GameState = {
@@ -17,6 +17,14 @@ type TutorialStep = {
 
 const GRID_SIZE = 4
 const WINNING_NUMBER = 2048
+
+// Powerup unlock thresholds
+const UNDO_UNLOCK_THRESHOLD = 128
+const SWAP_UNLOCK_THRESHOLD = 256
+const DELETE_UNLOCK_THRESHOLD = 512
+const MAX_UNDO_COUNT = 3
+const MAX_SWAP_COUNT = 2
+const MAX_DELETE_COUNT = 1
 
 // Tutorial steps
 const TUTORIAL_STEPS: TutorialStep[] = [
@@ -48,6 +56,29 @@ const TUTORIAL_STEPS: TutorialStep[] = [
     description: "Now you know all the basics. Try moving tiles and aim to reach 2048! Good luck!"
   }
 ]
+
+// Compare two arrays for equality
+const arraysEqual = (arr1: (number | null)[], arr2: (number | null)[]): boolean => {
+  return arr1.length === arr2.length && arr1.every((val, idx) => val === arr2[idx])
+}
+
+// Safe localStorage wrapper
+const safeLocalStorage = {
+  getItem: (key: string): string | null => {
+    try {
+      return localStorage.getItem(key)
+    } catch {
+      return null
+    }
+  },
+  setItem: (key: string, value: string): void => {
+    try {
+      localStorage.setItem(key, value)
+    } catch {
+      // Silently fail if localStorage is unavailable
+    }
+  }
+}
 
 // Initialize empty 4x4 board
 const initializeBoard = (): GameBoard => {
@@ -116,7 +147,7 @@ const moveBoard = (board: GameBoard, direction: 'up' | 'down' | 'left' | 'right'
       const { newLine, score } = moveLine(board[row])
       newBoard[row] = newLine
       totalScore += score
-      if (JSON.stringify(newLine) !== JSON.stringify(board[row])) {
+      if (!arraysEqual(newLine, board[row])) {
         moved = true
       }
     }
@@ -126,7 +157,7 @@ const moveBoard = (board: GameBoard, direction: 'up' | 'down' | 'left' | 'right'
       const { newLine, score } = moveLine(reversedLine)
       newBoard[row] = newLine.reverse()
       totalScore += score
-      if (JSON.stringify(newBoard[row]) !== JSON.stringify(board[row])) {
+      if (!arraysEqual(newBoard[row], board[row])) {
         moved = true
       }
     }
@@ -138,7 +169,7 @@ const moveBoard = (board: GameBoard, direction: 'up' | 'down' | 'left' | 'right'
         newBoard[row][col] = newLine[row]
       }
       totalScore += score
-      if (JSON.stringify(newLine) !== JSON.stringify(column)) {
+      if (!arraysEqual(newLine, column)) {
         moved = true
       }
     }
@@ -151,7 +182,7 @@ const moveBoard = (board: GameBoard, direction: 'up' | 'down' | 'left' | 'right'
         newBoard[row][col] = reversedNewLine[row]
       }
       totalScore += score
-      if (JSON.stringify(reversedNewLine) !== JSON.stringify(board.map(row => row[col]))) {
+      if (!arraysEqual(reversedNewLine, board.map(row => row[col]))) {
         moved = true
       }
     }
@@ -256,11 +287,11 @@ export default function Game2048() {
 
   // Load saved data from localStorage
   useEffect(() => {
-    const savedBestScore = localStorage.getItem('2048-best-score')
-    const savedTutorial = localStorage.getItem('2048-tutorial-seen')
+    const savedBestScore = safeLocalStorage.getItem('2048-best-score')
+    const savedTutorial = safeLocalStorage.getItem('2048-tutorial-seen')
 
     if (savedBestScore) {
-      setBestScore(parseInt(savedBestScore))
+      setBestScore(Number.parseInt(savedBestScore))
     }
 
     if (savedTutorial) {
@@ -275,19 +306,14 @@ export default function Game2048() {
   useEffect(() => {
     if (score > bestScore) {
       setBestScore(score)
-      localStorage.setItem('2048-best-score', score.toString())
+      safeLocalStorage.setItem('2048-best-score', score.toString())
     }
   }, [score, bestScore])
-
-  // Save game state for undo
-  const saveGameState = useCallback(() => {
-    setUndoStack(prev => [...prev.slice(-4), { board, score }]) // Keep last 5 states
-  }, [board, score])
 
   // Process a move and handle all side effects
   const processMove = useCallback((direction: 'up' | 'down' | 'left' | 'right'): boolean => {
     // Save current state before move
-    saveGameState()
+    setUndoStack(prev => [...prev.slice(-4), { board, score }]) // Keep last 5 states
 
     const { newBoard, score: moveScore, moved } = moveBoard(board, direction)
 
@@ -298,9 +324,15 @@ export default function Game2048() {
     setScore(prev => prev + moveScore)
 
     // Check for powerup unlocks
-    if (moveScore >= 128 && undoCount < 3) setUndoCount(prev => Math.min(prev + 1, 3))
-    if (moveScore >= 256 && swapCount < 2) setSwapCount(prev => Math.min(prev + 1, 2))
-    if (moveScore >= 512 && deleteCount < 1) setDeleteCount(prev => Math.min(prev + 1, 1))
+    if (moveScore >= UNDO_UNLOCK_THRESHOLD && undoCount < MAX_UNDO_COUNT) {
+      setUndoCount(prev => Math.min(prev + 1, MAX_UNDO_COUNT))
+    }
+    if (moveScore >= SWAP_UNLOCK_THRESHOLD && swapCount < MAX_SWAP_COUNT) {
+      setSwapCount(prev => Math.min(prev + 1, MAX_SWAP_COUNT))
+    }
+    if (moveScore >= DELETE_UNLOCK_THRESHOLD && deleteCount < MAX_DELETE_COUNT) {
+      setDeleteCount(prev => Math.min(prev + 1, MAX_DELETE_COUNT))
+    }
 
     if (isGameWon(boardWithNewTile) && !gameWon) {
       setGameWon(true)
@@ -311,7 +343,7 @@ export default function Game2048() {
     }
 
     return true
-  }, [board, saveGameState, undoCount, swapCount, deleteCount, gameWon])
+  }, [board, score, undoCount, swapCount, deleteCount, gameWon])
 
   // Initialize game with two random tiles
   const startNewGame = useCallback(() => {
@@ -360,8 +392,11 @@ export default function Game2048() {
           // Deselect if clicking same tile
           setSelectedTiles([])
         } else if (board[row][col]) {
+          // Save state for undo before swapping
+          setUndoStack(prev => [...prev.slice(-4), { board, score }])
+
           // Swap tiles
-          const newBoard = board.map((r, rIdx) => 
+          const newBoard = board.map((r, rIdx) =>
             r.map((cell, cIdx) => {
               if (rIdx === firstRow && cIdx === firstCol) return board[row][col]
               if (rIdx === row && cIdx === col) return board[firstRow][firstCol]
@@ -378,24 +413,31 @@ export default function Game2048() {
       // Delete all tiles with the same number
       const targetValue = board[row][col]
       if (targetValue && deleteCount > 0) {
+        // Save state for undo before deleting
+        setUndoStack(prev => [...prev.slice(-4), { board, score }])
+
         const newBoard = board.map(r => r.map(cell => cell === targetValue ? null : cell))
-        
+
         // 检查棋盘是否为空，如果是则添加瓷砖
         const hasAnyTiles = newBoard.some(row => row.some(cell => cell !== null))
+        let finalBoard = newBoard
         if (!hasAnyTiles) {
           const boardWithTile1 = addRandomTile(newBoard)
-          const finalBoard = addRandomTile(boardWithTile1)
-          setBoard(finalBoard)
-        } else {
-          setBoard(newBoard)
+          finalBoard = addRandomTile(boardWithTile1)
         }
-        
+
+        setBoard(finalBoard)
         setDeleteCount(prev => prev - 1)
         setPowerupMode('none')
         setSelectedTiles([])
+
+        // Check game state after deletion
+        if (isGameOver(finalBoard)) {
+          setGameOver(true)
+        }
       }
     }
-  }, [powerupMode, selectedTiles, board, deleteCount])
+  }, [powerupMode, selectedTiles, board, score, deleteCount])
 
   // Handle keyboard input
   const handleKeyPress = useCallback((event: KeyboardEvent) => {
@@ -458,8 +500,10 @@ export default function Game2048() {
   }, [handleKeyPress])
 
   // Initialize game on mount
+  const hasInitialized = useRef(false)
   useEffect(() => {
-    if (!showWelcome && !showTutorial && hasSeenTutorial) {
+    if (!showWelcome && !showTutorial && hasSeenTutorial && !hasInitialized.current) {
+      hasInitialized.current = true
       startNewGame()
     }
   }, [showWelcome, showTutorial, hasSeenTutorial, startNewGame])
@@ -477,7 +521,7 @@ export default function Game2048() {
     } else {
       setShowTutorial(false)
       setHasSeenTutorial(true)
-      localStorage.setItem('2048-tutorial-seen', 'true')
+      safeLocalStorage.setItem('2048-tutorial-seen', 'true')
       startNewGame()
     }
   }
@@ -485,7 +529,7 @@ export default function Game2048() {
   const skipTutorial = () => {
     setShowTutorial(false)
     setHasSeenTutorial(true)
-    localStorage.setItem('2048-tutorial-seen', 'true')
+    safeLocalStorage.setItem('2048-tutorial-seen', 'true')
     startNewGame()
   }
 
@@ -501,7 +545,7 @@ export default function Game2048() {
               onClick={() => {
                 setShowWelcome(false)
                 setHasSeenTutorial(true)
-                localStorage.setItem('2048-tutorial-seen', 'true')
+                safeLocalStorage.setItem('2048-tutorial-seen', 'true')
                 startNewGame()
               }}
               className="absolute -right-3 -top-3 flex h-8 w-8 items-center justify-center rounded-full bg-[#776e65] text-white text-xl hover:bg-[#8f7a93]"
@@ -523,7 +567,7 @@ export default function Game2048() {
                 onClick={() => {
                   setShowWelcome(false)
                   setHasSeenTutorial(true)
-                  localStorage.setItem('2048-tutorial-seen', 'true')
+                  safeLocalStorage.setItem('2048-tutorial-seen', 'true')
                   startNewGame()
                 }}
                 className="flex-1 rounded-lg bg-[#bbada0] px-6 py-3 text-sm font-semibold text-white hover:bg-[#a89d94] transition-colors"
@@ -576,7 +620,7 @@ export default function Game2048() {
           </div>
 
           {/* 三个色块一行，宽度与棋盘一致 */}
-          <div className="flex w-[420px] mx-auto gap-0 h-[72px]">
+          <div className="flex w-full max-w-[420px] mx-auto gap-0 h-[72px]">
             {/* Score */}
             <div className="flex-1 flex flex-col items-center justify-center rounded-l-lg bg-[#bbada0] px-4 py-3 text-white h-full">
               <span className="text-xs font-bold uppercase tracking-wide">Score</span>
@@ -669,7 +713,7 @@ export default function Game2048() {
 
         {/* Powerups Section */}
         <div className="w-full max-w-lg" id="powerups-section">
-          <div className="flex w-[420px] mx-auto gap-0 rounded-2xl bg-[#e6ddd4] p-4">
+          <div className="flex w-full max-w-[420px] mx-auto gap-0 rounded-2xl bg-[#e6ddd4] p-4">
             {/* Undo */}
             <div className="group relative flex-1 flex flex-col items-center gap-2">
               <div className="absolute -top-20 z-30 hidden w-max max-w-64 rounded-xl bg-[#776e65] px-4 py-3 text-xs text-white opacity-0 group-hover:block group-hover:opacity-100 transition-opacity pointer-events-none">
@@ -698,7 +742,7 @@ export default function Game2048() {
                 )}
               </div>
               <div className="flex gap-[3px] self-stretch px-2">
-                <div className={`h-[3px] flex-auto rounded-full ${undoCount > 0 ? 'bg-[#bbada0]' : 'bg-[#bbada0]/30'}`}></div>
+                <div className={`h-[3px] flex-auto rounded-full ${undoCount > 0 ? 'bg-[#bbada0]' : 'bg-[#bbada0]/30'}`} />
               </div>
             </div>
 
@@ -731,7 +775,7 @@ export default function Game2048() {
                 )}
               </div>
               <div className="flex gap-[3px] self-stretch px-2">
-                <div className={`h-[3px] flex-auto rounded-full ${swapCount > 0 ? 'bg-[#bbada0]' : 'bg-[#bbada0]/30'}`}></div>
+                <div className={`h-[3px] flex-auto rounded-full ${swapCount > 0 ? 'bg-[#bbada0]' : 'bg-[#bbada0]/30'}`} />
               </div>
             </div>
 
@@ -764,7 +808,7 @@ export default function Game2048() {
                 )}
               </div>
               <div className="flex gap-[3px] self-stretch px-2">
-                <div className={`h-[3px] flex-auto rounded-full ${deleteCount > 0 ? 'bg-[#bbada0]' : 'bg-[#bbada0]/30'}`}></div>
+                <div className={`h-[3px] flex-auto rounded-full ${deleteCount > 0 ? 'bg-[#bbada0]' : 'bg-[#bbada0]/30'}`} />
               </div>
             </div>
           </div>
@@ -787,6 +831,7 @@ export default function Game2048() {
                     Controls
                   </h3>
                   <p>Use <strong>arrow keys</strong> or <strong>WASD</strong> to slide tiles. All tiles move together in the chosen direction.</p>
+                  <p className="mt-2 text-xs opacity-75">Tip: Press <strong>Ctrl/Cmd+Z</strong> to undo, <strong>N</strong> or <strong>R</strong> to restart.</p>
                 </div>
                 <div>
                   <h3 className="font-bold mb-2 text-base text-[#8f7a93]">
