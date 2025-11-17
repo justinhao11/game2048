@@ -441,6 +441,22 @@ export default function Game2048() {
 
   // Handle keyboard input
   const handleKeyPress = useCallback((event: KeyboardEvent) => {
+    // Handle Escape key first (before other checks)
+    if (event.code === 'Escape') {
+      if (powerupMode !== 'none') {
+        setPowerupMode('none')
+        setSelectedTiles([])
+      }
+      return
+    }
+
+    // Handle Ctrl/Cmd+Z for undo
+    if (event.code === 'KeyZ' && (event.ctrlKey || event.metaKey)) {
+      handleUndo()
+      return
+    }
+
+    // Block other inputs during animations, tutorial, or powerup mode
     if (isProcessingMove || showTutorial || powerupMode !== 'none') return
     if (gameOver && !['KeyN', 'KeyR'].includes(event.code)) return
 
@@ -466,17 +482,6 @@ export default function Game2048() {
       case 'KeyN':
       case 'KeyR':
         startNewGame()
-        return
-      case 'KeyZ':
-        if (event.ctrlKey || event.metaKey) {
-          handleUndo()
-        }
-        return
-      case 'Escape':
-        if (powerupMode !== 'none') {
-          setPowerupMode('none')
-          setSelectedTiles([])
-        }
         return
       default:
         return
@@ -522,6 +527,7 @@ export default function Game2048() {
       setShowTutorial(false)
       setHasSeenTutorial(true)
       safeLocalStorage.setItem('2048-tutorial-seen', 'true')
+      hasInitialized.current = true // Prevent double initialization
       startNewGame()
     }
   }
@@ -530,6 +536,7 @@ export default function Game2048() {
     setShowTutorial(false)
     setHasSeenTutorial(true)
     safeLocalStorage.setItem('2048-tutorial-seen', 'true')
+    hasInitialized.current = true // Prevent double initialization
     startNewGame()
   }
 
@@ -546,6 +553,7 @@ export default function Game2048() {
                 setShowWelcome(false)
                 setHasSeenTutorial(true)
                 safeLocalStorage.setItem('2048-tutorial-seen', 'true')
+                hasInitialized.current = true // Prevent double initialization
                 startNewGame()
               }}
               className="absolute -right-3 -top-3 flex h-8 w-8 items-center justify-center rounded-full bg-[#776e65] text-white text-xl hover:bg-[#8f7a93]"
@@ -568,6 +576,7 @@ export default function Game2048() {
                   setShowWelcome(false)
                   setHasSeenTutorial(true)
                   safeLocalStorage.setItem('2048-tutorial-seen', 'true')
+                  hasInitialized.current = true // Prevent double initialization
                   startNewGame()
                 }}
                 className="flex-1 rounded-lg bg-[#bbada0] px-6 py-3 text-sm font-semibold text-white hover:bg-[#a89d94] transition-colors"
